@@ -20,6 +20,7 @@ if uploaded_file:
 question = st.text_input("Ask your question")
 
 if st.button("Get Explanation"):
+    
     if not question:
         st.warning("Please enter a question.")
     else:

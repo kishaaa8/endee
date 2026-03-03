@@ -6,6 +6,11 @@ import msgpack
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
+#new 
+from transformers import AutoTokenizer
+import nltk
+
+
 # -------- Config --------
 ENDEE_URL = "http://localhost:8080"
 INDEX_NAME = "motor-laws"
@@ -16,6 +21,11 @@ DATA_PATH = os.path.join(SCRIPT_DIR, "..", "data")
 # Load embedding model
 print("Loading embedding model...")
 model = SentenceTransformer("all-MiniLM-L6-v2")
+
+#new
+print("Loading tokenizer...")
+tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+nltk.download("punkt")
 
 
 # -------- PDF Loader --------
@@ -30,10 +40,49 @@ def load_pdf(file_path):
 
 
 # -------- Text Chunking --------
-def chunk_text(text, chunk_size=500):
+# def chunk_text(text, chunk_size=500):
+#     chunks = []
+#     for i in range(0, len(text), chunk_size):
+#         chunks.append(text[i:i+chunk_size])
+    # return chunks
+
+#new
+# -------- Text Chunking (Sentence + Token based) --------
+def chunk_text(text, max_tokens=250, overlap=40):
+    sentences = nltk.sent_tokenize(text)
+
     chunks = []
-    for i in range(0, len(text), chunk_size):
-        chunks.append(text[i:i+chunk_size])
+    current_chunk = []
+    current_tokens = 0
+
+    for sentence in sentences:
+        token_len = len(tokenizer.encode(sentence, add_special_tokens=False))
+
+        if current_tokens + token_len <= max_tokens:
+            current_chunk.append(sentence)
+            current_tokens += token_len
+        else:
+            chunk = " ".join(current_chunk).strip()
+            if chunk:
+                chunks.append(chunk)
+
+            # overlap from previous chunk
+            if overlap > 0 and chunks:
+                overlap_tokens = tokenizer.encode(chunks[-1], add_special_tokens=False)[-overlap:]
+                overlap_text = tokenizer.decode(
+                    overlap_tokens,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                current_chunk = [overlap_text, sentence]
+            else:
+                current_chunk = [sentence]
+
+            current_tokens = len(tokenizer.encode(" ".join(current_chunk), add_special_tokens=False))
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk).strip())
+
     return chunks
 
 
@@ -108,7 +157,7 @@ def ingest(chunk_size=500, delete_first=False):
         print(f"Processing: {file}")
 
         text = load_pdf(path)
-        chunks = chunk_text(text, chunk_size=chunk_size)
+        chunks = chunk_text(text, max_tokens=chunk_size)
         print(f"  -> {len(chunks)} chunks (chunk_size={chunk_size})")
 
         for chunk in chunks:
@@ -148,8 +197,8 @@ def ingest(chunk_size=500, delete_first=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest PDFs into Endee vector database")
-    parser.add_argument("--chunk-size", type=int, default=500,
-                        help="Characters per chunk (default: 500). Try 200, 500, 1000 to experiment.")
+    parser.add_argument("--chunk-size", type=int, default=250,
+                        help="Tokens per chunk (recommended: 200-300)")
     parser.add_argument("--delete-index", action="store_true",
                         help="Delete existing index before re-ingesting")
     args = parser.parse_args()
